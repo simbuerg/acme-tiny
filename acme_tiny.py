@@ -1,27 +1,26 @@
-#!/usr/bin/env python
-import argparse, subprocess, json, os, urllib2, sys, base64, binascii, time, \
+#!/usr/bin/env python2
+from plumbum import cli
+from logging import info, warn
+import json, os, sys, base64, binascii, time, urllib2, \
     hashlib, re, copy, textwrap
 
-#CA = "https://acme-staging.api.letsencrypt.org"
 CA = "https://acme-v01.api.letsencrypt.org"
 
+
 def get_crt(account_key, csr, acme_dir):
+    from plumbum.cmd import openssl
 
     # helper function base64 encode for jose spec
     def _b64(b):
         return base64.urlsafe_b64encode(b).replace("=", "")
 
     # parse account key to get public key
-    sys.stderr.write("Parsing account key...")
-    proc = subprocess.Popen(["openssl", "rsa", "-in", account_key, "-noout", "-text"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise IOError("Error reading account key")
+    info("Parsing account key...")
+    out = openssl("rsa", "-in", account_key, "-noout", "-text")
     pub_hex, pub_exp = re.search(
-        "modulus:\n\s+00:([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)",
-        out, re.MULTILINE|re.DOTALL).groups()
-    pub_mod = binascii.unhexlify(re.sub("(\s|:)", "", pub_hex))
+        r"modulus:\n\s+00:([a-f0-9\:\s]+?)\npublicExponent: ([0-9]+)", out,
+        re.MULTILINE | re.DOTALL).groups()
+    pub_mod = binascii.unhexlify(re.sub(r"(\s|:)", "", pub_hex))
     pub_mod64 = _b64(pub_mod)
     pub_exp = "{0:x}".format(int(pub_exp))
     pub_exp = "0{}".format(pub_exp) if len(pub_exp) % 2 else pub_exp
@@ -34,9 +33,11 @@ def get_crt(account_key, csr, acme_dir):
             "n": pub_mod64,
         },
     }
-    accountkey_json = json.dumps(header['jwk'], sort_keys=True, separators=(',', ':'))
+    accountkey_json = json.dumps(header['jwk'],
+                                 sort_keys=True,
+                                 separators=(',', ':'))
     thumbprint = _b64(hashlib.sha256(accountkey_json).digest())
-    sys.stderr.write("parsed!\n")
+    info("parsed!\n")
 
     # helper function make signed requests
     def _send_signed_request(url, payload):
@@ -45,9 +46,7 @@ def get_crt(account_key, csr, acme_dir):
         protected = copy.deepcopy(header)
         protected.update({"nonce": nonce})
         protected64 = _b64(json.dumps(protected))
-        proc = subprocess.Popen(["openssl", "dgst", "-sha256", "-sign", account_key],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate("{}.{}".format(protected64, payload64))
+        out = openssl("dgst", "-sha256", "-sign", account_key)
         data = json.dumps({
             "header": header,
             "protected": protected64,
@@ -61,39 +60,38 @@ def get_crt(account_key, csr, acme_dir):
             return e.code, e.read()
 
     # find domains
-    sys.stderr.write("Parsing CSR...")
-    proc = subprocess.Popen(["openssl", "req", "-in", csr, "-noout", "-text"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise IOError("Error loading {}".format(csr))
+    info("Parsing CSR...")
+    out = openssl("req", "-in", csr, "-noout", "-text")
     domains = set([])
-    common_name = re.search("Subject:.*? CN=([^\s,;/]+)", out)
+    common_name = re.search(r"Subject:.*? CN=([^\s,;/]+)", out)
     if common_name is not None:
         domains.add(common_name.group(1))
-    subject_alt_names = re.search("X509v3 Subject Alternative Name: \n +([^\n]+)\n", out, re.MULTILINE|re.DOTALL)
+    subject_alt_names = re.search(
+        "X509v3 Subject Alternative Name: \n +([^\n]+)\n", out, re.MULTILINE
+        | re.DOTALL)
     if subject_alt_names is not None:
         for san in subject_alt_names.group(1).split(", "):
             if san.startswith("DNS:"):
                 domains.add(san[4:])
-    sys.stderr.write("parsed!\n")
+    info("parsed!\n")
 
     # get the certificate domains and expiration
-    sys.stderr.write("Registering account...")
+    info("Registering account...")
     code, result = _send_signed_request(CA + "/acme/new-reg", {
         "resource": "new-reg",
-        "agreement": "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf",
+        "agreement":
+        "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf",
     })
     if code == 201:
-        sys.stderr.write("registered!\n")
+        info("registered!\n")
     elif code == 409:
-        sys.stderr.write("already registered!\n")
+        warn("already registered!\n")
     else:
         raise ValueError("Error registering: {} {}".format(code, result))
 
     # verify each domain
     for domain in domains:
-        sys.stderr.write("Verifying {}...".format(domain))
+        info("Verifying {}...", domain)
 
         # get new challenge
         code, result = _send_signed_request(CA + "/acme/new-authz", {
@@ -107,13 +105,14 @@ def get_crt(account_key, csr, acme_dir):
             raise ValueError("Error registering: {} {}".format(code, result))
 
         # make the challenge file
-        challenge = [c for c in json.loads(result)['challenges'] if c['type'] == "http-01"][0]
+        challenge = [c
+                     for c in json.loads(result)['challenges']
+                     if c['type'] == "http-01"][0]
         keyauthorization = "{}.{}".format(challenge['token'], thumbprint)
         acme_dir = acme_dir[:-1] if acme_dir.endswith("/") else acme_dir
         wellknown_path = "{}/{}".format(acme_dir, challenge['token'])
-        wellknown_file = open(wellknown_path, "w")
-        wellknown_file.write(keyauthorization)
-        wellknown_file.close()
+        with open(wellknown_path, "w") as wellknown_file:
+            wellknown_file.write(keyauthorization)
 
         # check that the file is in place
         wellknown_url = "http://{}/.well-known/acme-challenge/{}".format(
@@ -123,8 +122,9 @@ def get_crt(account_key, csr, acme_dir):
             assert resp.read().strip() == keyauthorization
         except (urllib2.HTTPError, urllib2.URLError, AssertionError):
             os.remove(wellknown_path)
-            raise ValueError("Wrote file to {}, but couldn't download {}".format(
-                wellknown_path, wellknown_url))
+            raise ValueError(
+                "Wrote file to {}, but couldn't download {}".format(
+                    wellknown_path, wellknown_url))
 
         # notify challenge are met
         code, result = _send_signed_request(challenge['uri'], {
@@ -132,7 +132,8 @@ def get_crt(account_key, csr, acme_dir):
             "keyAuthorization": keyauthorization,
         })
         if code != 202:
-            raise ValueError("Error triggering challenge: {} {}".format(code, result))
+            raise ValueError("Error triggering challenge: {} {}".format(
+                code, result))
 
         # wait for challenge to be verified
         while True:
@@ -153,45 +154,59 @@ def get_crt(account_key, csr, acme_dir):
                     domain, challenge_status))
 
     # get the new certificate
-    sys.stderr.write("Signing certificate...")
-    proc = subprocess.Popen(["openssl", "req", "-in", csr, "-outform", "DER"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    csr_der, err = proc.communicate()
+    info("Signing certificate...")
+    csr_der = openssl("req", "-in", csr, "-outform", "DER", recode=201)
     code, result = _send_signed_request(CA + "/acme/new-cert", {
         "resource": "new-cert",
         "csr": _b64(csr_der),
     })
-    if code != 201:
-        raise ValueError("Error signing certificate: {} {}".format(code, result))
 
     # return signed certificate!
-    sys.stderr.write("signed!\n")
+    info("signed!\n")
     return """-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n""".format(
-        "\n".join(textwrap.wrap(base64.b64encode(result), 64)))
+        "\n".join(textwrap.wrap(
+            base64.b64encode(result), 64)))
+
+
+class AcmeTiny(cli.Application):
+    DESCRIPTION = """
+    This script automates the process of getting a signed TLS certificate from
+    Let's Encrypt using the ACME protocol. It will need to be run on your server
+    and have access to your private account key, so PLEASE READ THROUGH IT! It's
+    only ~200 lines, so it won't take long.
+
+    ===Example Usage===
+    python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed.crt
+    ===================
+
+    ===Example Crontab Renewal (once per month)===
+    0 0 1 * * python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > /path/to/signed.crt 2>> /var/log/acme_tiny.log
+    ==============================================
+    """
+
+    _account_key = ""
+    _csr_file_path = ""
+    _acme_dir_path = ""
+
+    @cli.autoswitch(cli.ExistingFile, mandatory=True)
+    def account_key(self, key_file_path):
+        """Path to your Let's Encrypt account private key."""
+        self._account_key = key_file_path
+
+    @cli.autoswitch(cli.ExistingFile, mandatory=True)
+    def csr(self, csr_file_path):
+        """Path to your certificate signing request."""
+        self._csr_file_path = csr_file_path
+
+    @cli.autoswitch(cli.ExistingDirectory, mandatory=True)
+    def acme_dir(self, acme_dir_path):
+        self._acme_dir_path = acme_dir_path
+
+    def main(self):
+        signed_crt = get_crt(self._account_key, self._csr_file_path,
+                             self._acme_dir_path)
+        sys.stdout.write(signed_crt)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="""\
-This script automates the process of getting a signed TLS certificate from
-Let's Encrypt using the ACME protocol. It will need to be run on your server
-and have access to your private account key, so PLEASE READ THROUGH IT! It's
-only ~200 lines, so it won't take long.
-
-===Example Usage===
-python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed.crt
-===================
-
-===Example Crontab Renewal (once per month)===
-0 0 1 * * python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > /path/to/signed.crt 2>> /var/log/acme_tiny.log
-==============================================
-
-""")
-    parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
-    parser.add_argument("--csr", required=True, help="path to your certificate signing request")
-    parser.add_argument("--acme-dir", required=True, help="path to the .well-known/acme-challenge/ directory")
-
-    args = parser.parse_args()
-    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir)
-    sys.stdout.write(signed_crt)
-
+    AcmeTiny().run()
