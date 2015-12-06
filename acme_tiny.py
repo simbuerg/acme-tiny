@@ -194,6 +194,7 @@ python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /u
 
     @cli.autoswitch(cli.ExistingDirectory, mandatory=True)
     def acme_dir(self, acme_dir_path):
+        """Path to the .well-known/acme-challenge/ directory."""
         self._acme_dir_path = acme_dir_path
 
     def main(self):
