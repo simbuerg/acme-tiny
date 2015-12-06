@@ -116,7 +116,7 @@ def get_crt(account_key, csr, acme_dir):
         try:
             resp = requests.get(wellknown_url)
             assert resp.strip() == keyauthorization
-        except (requests.HTTPError, requests.URLError, AssertionError):
+        except (requests.HTTPError, AssertionError):
             os.remove(wellknown_path)
             raise ValueError(
                 "Wrote file to {}, but couldn't download {}".format(
