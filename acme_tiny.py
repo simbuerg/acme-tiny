@@ -102,8 +102,7 @@ def get_crt(account_key, csr, acme_dir):
             raise ValueError("Error registering: {} {}".format(code, result))
 
         # make the challenge file
-        challenge = [c
-                     for c in result['challenges']
+        challenge = [c for c in result['challenges']
                      if c['type'] == "http-01"][0]
         keyauthorization = "{}.{}".format(challenge['token'], thumbprint)
         acme_dir = acme_dir[:-1] if acme_dir.endswith("/") else acme_dir
@@ -166,21 +165,20 @@ def get_crt(account_key, csr, acme_dir):
 
 
 class AcmeTiny(cli.Application):
-    PROGNAME = 'acme_tiny.py'
-    DESCRIPTION = """
-This script automates the process of getting a signed TLS certificate from
-Let's Encrypt using the ACME protocol. It will need to be run on your server
-and have access to your private account key, so PLEASE READ THROUGH IT! It's
-only ~200 lines, so it won't take long.
+    """
+    This script automates the process of getting a signed TLS certificate from
+    Let's Encrypt using the ACME protocol. It will need to be run on your server
+    and have access to your private account key, so PLEASE READ THROUGH IT! It's
+    only ~200 lines, so it won't take long.
 
-===Example Usage===
-python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed.crt
-===================
+    ===Example Usage===
+    python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed.crt
+    ===================
 
-===Example Crontab Renewal (once per month)===
-0 0 1 * * python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > /path/to/signed.crt 2>> /var/log/acme_tiny.log
-==============================================
-"""
+    ===Example Crontab Renewal (once per month)===
+    0 0 1 * * python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > /path/to/signed.crt 2>> /var/log/acme_tiny.log
+    ==============================================
+    """
 
     @cli.autoswitch(cli.ExistingFile, mandatory=True)
     def account_key(self, key_file_path):
@@ -204,4 +202,4 @@ python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /u
 
 
 if __name__ == "__main__":
-    AcmeTiny().run()
+    AcmeTiny("acme_tiny.py").run()
