@@ -1,8 +1,8 @@
 #!/usr/bin/env python2
 from plumbum import cli
 from logging import info, warn
-import json, os, sys, base64, binascii, time, urllib2, \
-    hashlib, re, copy, textwrap
+
+import requests, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap
 
 CA = "https://acme-v01.api.letsencrypt.org"
 
@@ -41,7 +41,7 @@ def get_crt(account_key, csr, acme_dir):
 
     # helper function make signed requests
     def _send_signed_request(url, payload):
-        nonce = urllib2.urlopen(CA + "/directory").headers['Replay-Nonce']
+        nonce = requests.get(CA + "/directory").headers['Replay-Nonce']
         payload64 = _b64(json.dumps(payload))
         protected = copy.deepcopy(header)
         protected.update({"nonce": nonce})
@@ -53,11 +53,8 @@ def get_crt(account_key, csr, acme_dir):
             "payload": payload64,
             "signature": _b64(out),
         })
-        try:
-            resp = urllib2.urlopen(url, data)
-            return resp.getcode(), resp.read()
-        except urllib2.HTTPError as e:
-            return e.code, e.read()
+        resp = requests.get(url, payload=data)
+        return resp.status_code, resp.json()
 
     # find domains
     info("Parsing CSR...")
@@ -106,7 +103,7 @@ def get_crt(account_key, csr, acme_dir):
 
         # make the challenge file
         challenge = [c
-                     for c in json.loads(result)['challenges']
+                     for c in result['challenges']
                      if c['type'] == "http-01"][0]
         keyauthorization = "{}.{}".format(challenge['token'], thumbprint)
         acme_dir = acme_dir[:-1] if acme_dir.endswith("/") else acme_dir
@@ -118,9 +115,9 @@ def get_crt(account_key, csr, acme_dir):
         wellknown_url = "http://{}/.well-known/acme-challenge/{}".format(
             domain, challenge['token'])
         try:
-            resp = urllib2.urlopen(wellknown_url)
-            assert resp.read().strip() == keyauthorization
-        except (urllib2.HTTPError, urllib2.URLError, AssertionError):
+            resp = requests.get(wellknown_url)
+            assert resp.strip() == keyauthorization
+        except (requests.HTTPError, requests.URLError, AssertionError):
             os.remove(wellknown_path)
             raise ValueError(
                 "Wrote file to {}, but couldn't download {}".format(
@@ -138,9 +135,9 @@ def get_crt(account_key, csr, acme_dir):
         # wait for challenge to be verified
         while True:
             try:
-                resp = urllib2.urlopen(challenge['uri'])
-                challenge_status = json.loads(resp.read())
-            except urllib2.HTTPError as e:
+                resp = requests.get(challenge['uri'])
+                challenge_status = resp.json()
+            except requests.HTTPError as e:
                 raise ValueError("Error checking challenge: {} {}".format(
                     e.code, json.loads(e.read())))
             if challenge_status['status'] == "pending":
