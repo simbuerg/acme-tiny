@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 from plumbum import cli
 from logging import info, warn
 
